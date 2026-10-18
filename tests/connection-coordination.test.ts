@@ -59,9 +59,9 @@ describe("coordinated connections", () => {
     const manager = new ServerManager(config());
     const bridge = new ToolBridge(config().settings, pi);
     const discovery = gate();
-    manager.setToolRefreshCallback(async (name, client) => {
+    manager.setToolRefreshCallback(async (name, client, options) => {
       await discovery.promise;
-      await bridge.refreshTools(name, client, () => manager.getServer(name)?.state !== "stopped");
+      await bridge.refreshTools(name, client, () => manager.getServer(name)?.state !== "stopped", options);
     });
     try {
       assert.equal(manager.getServer("lazy")?.state, "stopped");

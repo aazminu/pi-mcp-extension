@@ -29,16 +29,10 @@ import { McpError, AuthCancelledError } from "./errors.js";
 import type { McpConfig, ServerConfig, Settings } from "./config.js";
 import { McpOAuthProvider, AuthRequiredError, getAuthStatus, resetAuth, invalidateStoredTokens } from "./oauth-provider.js";
 import { UnauthorizedError, type OAuthClientProvider } from "@modelcontextprotocol/sdk/client/auth.js";
-import {
-  setClientDefaultOptions,
-  getClientDefaultOptions,
-  type ToolRefreshOptions,
-} from "./tool-bridge.js";
+import type { ToolRefreshOptions } from "./tool-bridge.js";
 import { sanitizeTerminalText, type SanitizeTerminalTextOptions } from "./terminal-text.js";
 
 export {
-  setClientDefaultOptions,
-  getClientDefaultOptions,
   type ToolRefreshOptions,
   AuthCancelledError,
   sanitizeTerminalText,
@@ -820,10 +814,6 @@ export class ServerManager {
         if (!signal.aborted && this.onToolRefresh && server.state === "ready" && server.client === client) {
           try {
             const refreshTimeoutMs = this._resolveTimeoutMs(server);
-            setClientDefaultOptions(server.client, {
-              requestTimeoutMs: refreshTimeoutMs,
-              signal,
-            });
             await this.onToolRefresh(server.name, server.client, {
               requestTimeoutMs: refreshTimeoutMs,
               signal,
@@ -860,7 +850,6 @@ export class ServerManager {
         server.childPid = transport.pid;
       }
       // Readiness includes tool discovery, not just the MCP handshake.
-      setClientDefaultOptions(client, { requestTimeoutMs: timeoutMs, signal });
       if (this.onToolRefresh) {
         await this.onToolRefresh(server.name, client, {
           requestTimeoutMs: timeoutMs,

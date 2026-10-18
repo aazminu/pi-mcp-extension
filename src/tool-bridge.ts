@@ -32,26 +32,6 @@ export type ToolRefreshOptions = {
   signal?: AbortSignal | undefined;
 };
 
-// WHY: Store per-client default { requestTimeoutMs, signal } in a WeakMap so 2-argument
-// onToolRefresh callbacks ((name, client) => bridge.refreshTools(name, client)) still
-// inherit the server's configured requestTimeoutMs and handshake AbortSignal.
-const clientRefreshDefaults = new WeakMap<Client, ToolRefreshOptions>();
-
-export function setClientDefaultOptions(client: Client, options: ToolRefreshOptions): void {
-  if (client && typeof client === "object") {
-    clientRefreshDefaults.set(client, options);
-  }
-}
-
-export function getClientDefaultOptions(client: Client): ToolRefreshOptions | undefined {
-  if (client && typeof client === "object") {
-    return clientRefreshDefaults.get(client);
-  }
-  return undefined;
-}
-
-
-
 // ─── Schema Conversion ────────────────────────────────────────────────────────
 
 const KIND_SYMBOL = Symbol.for("TypeBox.Kind");
@@ -785,10 +765,9 @@ export class ToolBridge {
   ): Promise<void> {
     const isCurrent = typeof isCurrentOrOptions === "function" ? isCurrentOrOptions : () => true;
     const options = typeof isCurrentOrOptions === "object" ? isCurrentOrOptions : maybeOptions;
-    const defaults = getClientDefaultOptions(client);
-    const explicitTimeoutMs = options?.requestTimeoutMs ?? defaults?.requestTimeoutMs;
+    const explicitTimeoutMs = options?.requestTimeoutMs;
     const effectiveTimeoutMs = explicitTimeoutMs ?? this.settings.requestTimeoutMs;
-    const effectiveSignal = options?.signal ?? defaults?.signal;
+    const effectiveSignal = options?.signal;
     if (explicitTimeoutMs !== undefined) {
       this.serverTimeouts.set(serverName, explicitTimeoutMs);
     } else {

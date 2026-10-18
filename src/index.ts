@@ -614,14 +614,22 @@ export default async function (pi: ExtensionAPI, paths: { bootstrapCwd?: string;
   }
 
   manager.setToolRefreshCallback(async (serverName, client, options) => {
+    const server = manager.getServer(serverName);
+    const requestTimeoutMs =
+      options?.requestTimeoutMs ??
+      server?.config.requestTimeoutMs ??
+      config.settings.requestTimeoutMs;
     await bridge.refreshTools(
       serverName,
       client,
       () => {
-        const server = manager.getServer(serverName);
-        return server?.client === client && server.state !== "stopped";
+        const current = manager.getServer(serverName);
+        return current?.client === client && current.state !== "stopped";
       },
-      options,
+      {
+        ...options,
+        requestTimeoutMs,
+      },
     );
   });
   manager.setServerStoppedCallback((name) => bridge.deactivateServer(name));

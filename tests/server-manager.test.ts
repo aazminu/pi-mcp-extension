@@ -110,8 +110,8 @@ describe("ServerManager integration (stdio)", () => {
     manager = new ServerManager(config);
     mockPi = makeMockPi();
     bridge = new ToolBridge(config.settings, mockPi);
-    manager.setToolRefreshCallback(async (name, client) => {
-      await bridge.refreshTools(name, client);
+    manager.setToolRefreshCallback(async (name, client, options) => {
+      await bridge.refreshTools(name, client, options);
     });
   });
 
@@ -239,7 +239,7 @@ describe("ServerManager — unknown server", () => {
 });
 
 describe("Batch 2 — Issues #19, #20, #21", () => {
-  it("should resolve per-server requestTimeoutMs for tool discovery and execution via both 2-arg and 3-arg callbacks (Issue 19.1)", async () => {
+  it("should resolve per-server requestTimeoutMs for tool discovery and execution across initial and list_changed refreshes (Issue 19.1, #65)", async () => {
     const config = makeMockConfig({
       settings: {
         toolPrefix: "mcp",
@@ -260,19 +260,20 @@ describe("Batch 2 — Issues #19, #20, #21", () => {
     const mockPi = makeMockPi();
     const bridge = new ToolBridge(config.settings, mockPi);
 
-    let capturedCallbackOptions: { requestTimeoutMs?: number | undefined; signal?: AbortSignal | undefined } | undefined;
-    // Test 2-arg forwarding via WeakMap default options even when options is not explicitly passed to bridge.refreshTools
+    const capturedCallbackOptions: Array<{ requestTimeoutMs?: number | undefined; signal?: AbortSignal | undefined } | undefined> = [];
     manager.setToolRefreshCallback(async (name, client, options) => {
-      capturedCallbackOptions = options;
-      await bridge.refreshTools(name, client);
+      capturedCallbackOptions.push(options);
+      await bridge.refreshTools(name, client, options);
     });
 
     try {
       await manager.startServer("test", process.cwd());
-      assert.equal(capturedCallbackOptions?.requestTimeoutMs, 1234);
-      assert.ok(capturedCallbackOptions?.signal instanceof AbortSignal);
+      assert.equal(capturedCallbackOptions.length, 1);
+      assert.equal(capturedCallbackOptions[0]?.requestTimeoutMs, 1234);
+      assert.ok(capturedCallbackOptions[0]?.signal instanceof AbortSignal);
 
       const client = manager.getServer("test")!.client!;
+      let listToolsTimeout: number | undefined;
       let callToolTimeout: number | undefined;
       const origRequest = client.request.bind(client);
       client.request = async (
@@ -280,6 +281,9 @@ describe("Batch 2 — Issues #19, #20, #21", () => {
         schema: Parameters<typeof origRequest>[1],
         options?: Parameters<typeof origRequest>[2],
       ) => {
+        if (req.method === "tools/list") {
+          listToolsTimeout = options?.timeout;
+        }
         if (req.method === "tools/call") {
           callToolTimeout = options?.timeout;
         }
@@ -290,6 +294,17 @@ describe("Batch 2 — Issues #19, #20, #21", () => {
       assert.ok(echoTool);
       await echoTool.execute("call-1", { message: "timeout-check" }, undefined, () => {}, {});
       assert.equal(callToolTimeout, 1234);
+
+      // Trigger notifications/tools/list_changed and verify explicit options are passed on re-discovery too
+      await (client as unknown as { _onnotification: (msg: unknown) => Promise<void> })._onnotification({
+        jsonrpc: "2.0",
+        method: "notifications/tools/list_changed",
+      });
+      await new Promise((r) => setTimeout(r, 50));
+      assert.equal(capturedCallbackOptions.length, 2);
+      assert.equal(capturedCallbackOptions[1]?.requestTimeoutMs, 1234);
+      assert.ok(capturedCallbackOptions[1]?.signal instanceof AbortSignal);
+      assert.equal(listToolsTimeout, 1234);
     } finally {
       await manager.shutdownAll();
     }
