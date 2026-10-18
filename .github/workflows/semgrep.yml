@@ -42,12 +42,68 @@ jobs:
         run: semgrep --test --metrics=off .semgrep/
 
       - name: Run Semgrep SAST scan
+        id: semgrep
         run: semgrep scan --metrics=off --config p/typescript --config p/javascript --config p/github-actions --config .semgrep/ --error --sarif --output semgrep.sarif
+
+      - name: Drop suppressed findings from SARIF
+        id: filter_sarif
+        # WHY: GitHub Code Scanning ignores SARIF `suppressions` and turns in-source-suppressed
+        # findings into open alerts. We filter them out before upload so in-source `nosemgrep` + WHY
+        # is the single source of truth.
+        # Run even if real findings failed the scan step (if: always()), but skip if scan was skipped.
+        if: always() && steps.semgrep.outcome != 'skipped'
+        run: |
+          python3 - <<'EOF'
+          import json
+          import os
+          import sys
+
+          sarif_file = "semgrep.sarif"
+          if not os.path.isfile(sarif_file):
+              sys.exit(f"Error: SARIF file not found: {sarif_file}")
+
+          with open(sarif_file, "r", encoding="utf-8") as f:
+              data = json.load(f)
+
+          if not isinstance(data, dict) or "runs" not in data or not isinstance(data["runs"], list):
+              sys.exit("Error: Invalid SARIF: root must be an object with a 'runs' list")
+
+          total_findings = 0
+          dropped_findings = 0
+
+          for run in data["runs"]:
+              if not isinstance(run, dict):
+                  sys.exit("Error: Invalid SARIF: run element must be an object")
+              results = run.get("results")
+              if results is None:
+                  results = []
+              elif not isinstance(results, list):
+                  sys.exit("Error: Invalid SARIF: results must be a list")
+              kept = []
+              for res in results:
+                  if not isinstance(res, dict):
+                      sys.exit("Error: Invalid SARIF: result element must be an object")
+                  total_findings += 1
+                  if res.get("suppressions"):
+                      dropped_findings += 1
+                  else:
+                      kept.append(res)
+              run["results"] = kept
+
+          tmp_file = sarif_file + ".tmp"
+          with open(tmp_file, "w", encoding="utf-8") as f:
+              json.dump(data, f, indent=2)
+          os.replace(tmp_file, sarif_file)
+
+          remaining = total_findings - dropped_findings
+          print(f"SARIF filter: dropped {dropped_findings} suppressed finding(s), {remaining} remaining (total: {total_findings})")
+          EOF
 
       - name: Upload SARIF to GitHub Code Scanning
         uses: github/codeql-action/upload-sarif@6f2ac81f5cd81fe351a197ba0b00d91d03cd2aee # v4.39.0
-        # WHY: Run even if findings fail the scan step (if: always()), but skip on fork PRs where GITHUB_TOKEN lacks security-events: write.
-        if: always() && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+        # WHY: Run even if real findings fail the scan step (if: always()), but require the filter step to succeed,
+        # and skip on fork PRs where GITHUB_TOKEN lacks security-events: write.
+        if: always() && steps.filter_sarif.outcome == 'success' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
         with:
           sarif_file: semgrep.sarif
           category: semgrep

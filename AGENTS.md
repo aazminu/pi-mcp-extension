@@ -32,7 +32,7 @@ Tests must pass on macOS and Windows too. Skip a test only when the behavior is 
 5. **No new runtime dependencies without asking.** Runtime deps are only `@modelcontextprotocol/sdk` and `zod`. Pi packages (`@earendil-works/pi-coding-agent`, `@earendil-works/pi-ai`) and `typebox` are **peer** deps; never move them into `dependencies`, and never import the deprecated `@mariozechner/*` names.
 6. **No `any`.** Use `unknown` + narrowing or Zod. Preserve existing `// WHY:` comments; add one whenever you work around an MCP SDK, TypeBox, or Pi quirk.
 
-Semgrep and ESLint enforce several of these rules. Suppress a finding only with a justified inline comment (`// nosemgrep: <rule-id> -- WHY: ...`).
+Semgrep and ESLint enforce several of these rules. Suppress a finding only with a justified inline comment (`// nosemgrep: <rule-id> -- WHY: ...`); never dismiss Semgrep alerts in the GitHub UI. CI drops suppressed findings before SARIF upload so in-source comments remain the single source of truth.
 
 ## Repository map
 
@@ -48,6 +48,7 @@ Semgrep and ESLint enforce several of these rules. Suppress a finding only with 
 | `src/auth-lock.ts` | Cross-process `<hash>.json.lock` with heartbeat and stale-lock reclaim; injectable `AuthLockDeps` |
 | `src/callback-server.ts`, `src/callback-url.ts` | Loopback OAuth callback listener; pure redirect/callback URL validation and headless paste-back parsing |
 | `src/auth-challenge.ts` | `WWW-Authenticate` discovery (RFC 9728 `resource_metadata`, `scope`) |
+| `src/terminal-text.ts` | Pure terminal/notification text sanitization (`sanitizeTerminalText`): strips ANSI/OSC/DCS/C1 escape sequences and C0/C1 control characters, collapses line breaks, and bounds string length on code-point boundaries |
 | `src/errors.ts` | `McpError` kinds `config \| connection \| auth \| timeout \| protocol`; `AuthRequiredError`, `AuthLockError`, `AuthCancelledError` |
 
 Tests live in `tests/*.test.ts` (`node:test` + `node:assert/strict`, run through `tsx`). Fixtures: `tests/mock-server.ts`, `tests/helpers/`. Keep tests out of `src/`.
@@ -73,7 +74,7 @@ Each of these was a real bug, and the listed suites guard it. If you touch the a
 - `server.attempt` and `connectAttempts` entries are cleared in `finally` / `_shutdown()` on every path: success, failure, abort, reload.
 - stdio: pass the session `cwd` to `StdioClientTransport`, track the child PID as soon as it spawns, and have `_shutdown()` do SIGTERM → bounded wait → SIGKILL, including before retrying a failed handshake.
 - Health checks never overlap, each ping is time-bounded, and transport `onclose` triggers recovery for all three transports.
-- Decode child `stderr` with `StringDecoder` and pass every line through `sanitizeStderrLine` before storing or displaying it.
+- Decode child `stderr` with `StringDecoder` and pass every line and server-controlled log/error message through `sanitizeTerminalText` (`sanitizeStderrLine`) before storing or displaying it.
 - `session_start` / `session_shutdown`, `/mcp*` commands, and management tools are registered even if bootstrap config loading fails or finds no servers, because a later `session_start` in another directory may load a valid `.pi/mcp.json`. On reload, abort in-flight attempts, stop the callback server, call `ToolBridge.updateSettings`, and refresh the roots `cwd`. Root URIs use `pathToFileURL(cwd).href`.
 
 **Security & OAuth** (`oauth-fixes.test.ts`, `auth-lock.test.ts`, `auth-commands.test.ts`, `pi-1x-compat.test.ts`)
@@ -117,7 +118,7 @@ Workflows live in `.github/workflows/`. The checks below run on every PR, whatev
 | `ci.yml` | `test (macos-latest)`, `test (windows-latest)` | `npm test` on Node 22. macOS is blocking; Windows is non-blocking (`continue-on-error`) until it's proven green (#54) |
 | `workflow-lint.yml` | `workflow-lint` | `actionlint` (syntax, expressions, shellcheck of `run:` scripts) and `zizmor` (Actions security: injection, pinning, permissions, credentials), failing on any finding of low severity or above |
 | `secret-scan.yml` | `gitleaks` | No secrets in the PR's commits (pushes to `main`: the pushed range; weekly and on dispatch: full history). Output is redacted |
-| `semgrep.yml` | `semgrep` | Semgrep registry packs (`p/typescript`, `p/javascript`, `p/github-actions`) plus the custom rules in `.semgrep/rules/` that encode hard rules 1, 4, 5 and the security invariants above |
+| `semgrep.yml` | `semgrep` | Semgrep registry packs (`p/typescript`, `p/javascript`, `p/github-actions`) plus the custom rules in `.semgrep/rules/` that encode hard rules 1, 4, 5 and the security invariants above; drops in-source-suppressed findings before SARIF upload |
 | `dependency-review.yml` | `dependency-review` | Dependencies added or changed by the PR: no high/critical advisories and no copyleft licenses in runtime scope |
 | `pr-title.yml` | `pr-title` | PR title is a Conventional Commit; `feat` / `fix` / `perf` / `!` titles must change `CHANGELOG.md`; a PR-description line starting with `BREAKING CHANGE:` requires `!` in the title |
 
