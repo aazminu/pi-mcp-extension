@@ -91,7 +91,7 @@ export function isOAuthUnauthorizedError(error: unknown, seen = new Set<unknown>
 
   // Reject messages that explicitly report a non-401/403 HTTP status code
   const httpStatusMatch = msg.match(
-    /\b(?:HTTP\s+|status(?:\s+code)?[:\s]+|(?:POSTing|GETting|connecting)\s+to\s+\S+:\s*|(?:Non-200\s+status\s+code\s*\())(\d{3})\b/i,
+    /\b(?:HTTP(?:\/\d(?:\.\d)?)?\s+|status(?:\s+code)?[:\s]+|(?:POSTing|GETting|connecting)\s+to\s+\S+:\s*|(?:Non-200\s+status\s+code\s*\())(\d{3})\b/i,
   );
   if (httpStatusMatch) {
     const status = Number(httpStatusMatch[1]);
@@ -104,18 +104,17 @@ export function isOAuthUnauthorizedError(error: unknown, seen = new Set<unknown>
     // nosemgrep: pi-mcp.no-401-substring -- WHY: intentional message-text fallback after structured checks for SDK paths that only surface text
     /^\s*401\s*$/.test(msg) ||
     // nosemgrep: pi-mcp.no-401-substring -- WHY: intentional message-text fallback after structured checks for SDK paths that only surface text
-    /\bHTTP\s+401\b/i.test(msg) ||
+    /\bHTTP(?:\/\d(?:\.\d)?)?[:\s]+401\b/i.test(msg) ||
     // nosemgrep: pi-mcp.no-401-substring -- WHY: intentional message-text fallback after structured checks for SDK paths that only surface text
     /\bstatus(?:\s+code)?[:\s(]+401\b/i.test(msg) ||
+    // nosemgrep: pi-mcp.no-401-substring -- WHY: intentional message-text fallback after structured checks for SDK paths that only surface text
+    /\b(?:POSTing|GETting|connecting)\s+to\s+\S+:\s*401\b/i.test(msg) ||
     // nosemgrep: pi-mcp.no-401-substring -- WHY: intentional message-text fallback after structured checks for SDK paths that only surface text
     /\breturned\s+401\b/i.test(msg) ||
     // nosemgrep: pi-mcp.no-401-substring -- WHY: intentional message-text fallback after structured checks for SDK paths that only surface text
     /\b401\s+Unauthorized\b/i.test(msg) ||
     // nosemgrep: pi-mcp.no-401-substring -- WHY: intentional message-text fallback after structured checks for SDK paths that only surface text
-    /:\s*401\b/.test(msg) ||
-    // nosemgrep: pi-mcp.no-401-substring -- WHY: intentional message-text fallback after structured checks for SDK paths that only surface text
     /\(401\)/.test(msg) ||
-    /\bUnauthorized\b/i.test(msg) ||
     /\binvalid_token\b/i.test(msg)
   ) {
     return true;

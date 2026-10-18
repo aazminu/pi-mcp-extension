@@ -2035,7 +2035,19 @@ describe("OAuth Security Fixes", () => {
         ),
         true,
       );
+      assert.strictEqual(isOAuthUnauthorizedError(new Error("401")), true);
+      assert.strictEqual(isOAuthUnauthorizedError(new Error("HTTP 401")), true);
+      assert.strictEqual(isOAuthUnauthorizedError(new Error("HTTP/1.1 401 Unauthorized")), true);
+      assert.strictEqual(isOAuthUnauthorizedError(new Error("status 401")), true);
+      assert.strictEqual(isOAuthUnauthorizedError(new Error("status code: 401")), true);
+      assert.strictEqual(isOAuthUnauthorizedError(new Error("(401)")), true);
+      assert.strictEqual(isOAuthUnauthorizedError(new Error("Non-200 status code (401)")), true);
+      assert.strictEqual(isOAuthUnauthorizedError(new Error("SSE error: Non-200 status code (401)")), true);
+      assert.strictEqual(isOAuthUnauthorizedError(new Error("401 Unauthorized")), true);
+      assert.strictEqual(isOAuthUnauthorizedError(new Error("returned 401")), true);
+      assert.strictEqual(isOAuthUnauthorizedError(new Error('Bearer error="invalid_token"')), true);
       assert.strictEqual(isOAuthUnauthorizedError(new Error("Error POSTing to endpoint (HTTP 401): Unauthorized")), true);
+      assert.strictEqual(isOAuthUnauthorizedError(new Error("Error POSTing to endpoint: 401")), true);
       assert.strictEqual(isOAuthUnauthorizedError(new Error("Streamable HTTP error: Server returned 401 after successful authentication")), true);
       assert.strictEqual(
         isOAuthUnauthorizedError(Object.assign(new Error("MCP error -32000: HTTP 401 Unauthorized"), { code: -32000 })),
@@ -2055,6 +2067,13 @@ describe("OAuth Security Fixes", () => {
       );
 
       // False positives that MUST return false
+      assert.strictEqual(isOAuthUnauthorizedError(new Error("Worker queue error: 401 items failed")), false);
+      assert.strictEqual(
+        isOAuthUnauthorizedError(new Error("Downstream service reported Unauthorized connection to database")),
+        false,
+      );
+      assert.strictEqual(isOAuthUnauthorizedError(new Error("Unauthorized access to local file")), false);
+      assert.strictEqual(isOAuthUnauthorizedError(new Error("Line: 401 SyntaxError: Unexpected token")), false);
       assert.strictEqual(isOAuthUnauthorizedError(new McpError("401 Unauthorized from tool output", "srv", "tool")), false);
       assert.strictEqual(
         isOAuthUnauthorizedError(Object.assign(new Error("Error POSTing to endpoint: worker 401 failed"), { code: 500 })),

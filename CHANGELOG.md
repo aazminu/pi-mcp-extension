@@ -6,6 +6,9 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+- Tighten `isOAuthUnauthorizedError` message-text fallback patterns so unrelated `: 401` and `Unauthorized` substrings in non-HTTP errors no longer trigger unwanted OAuth flows (#81).
+
 ## [1.9.8] - 2026-10-18
 
 ### Security
