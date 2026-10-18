@@ -34,8 +34,16 @@ import {
   getClientDefaultOptions,
   type ToolRefreshOptions,
 } from "./tool-bridge.js";
+import { sanitizeTerminalText, type SanitizeTerminalTextOptions } from "./terminal-text.js";
 
-export { setClientDefaultOptions, getClientDefaultOptions, type ToolRefreshOptions, AuthCancelledError };
+export {
+  setClientDefaultOptions,
+  getClientDefaultOptions,
+  type ToolRefreshOptions,
+  AuthCancelledError,
+  sanitizeTerminalText,
+  type SanitizeTerminalTextOptions,
+};
 
 
 export function isOAuthUnauthorizedError(error: unknown, seen = new Set<unknown>()): boolean {
@@ -136,13 +144,7 @@ export function isOAuthUnauthorizedError(error: unknown, seen = new Set<unknown>
  * control characters from a single server stderr line before storing or logging.
  */
 export function sanitizeStderrLine(line: string): string {
-  return line
-    .replace(/\r$/, "")
-    .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "")
-    .replace(/\x1b\][\s\S]*?(?:\x07|\x1b\\)/g, "")
-    .replace(/\x1b[P^_][\s\S]*?\x1b\\/g, "")
-    .replace(/\x1b[@-Z\\-_]/g, "")
-    .replace(/\x1b|[\x00-\x08\x0b-\x1f\x7f-\x9f]/g, "");
+  return sanitizeTerminalText(line);
 }
 
 function resolveEnv(extra?: Record<string, string>): Record<string, string> {
@@ -418,7 +420,7 @@ export class ServerManager {
     if (all.length === 0) return "pi-mcp: No servers configured (create ~/.pi/agent/mcp.json)";
     const lines = all.map((s) => {
       const icon = s.state === "ready" ? "✓" : s.state === "starting" ? "⟳" : "✗";
-      const err = s.lastError ? ` — ${s.lastError.message}` : "";
+      const err = s.lastError ? ` — ${sanitizeTerminalText(s.lastError.message)}` : "";
       return `  ${icon} ${s.name} (${s.state})${err}`;
     });
     const ready = all.filter((s) => s.state === "ready").length;
@@ -827,9 +829,9 @@ export class ServerManager {
               signal,
             });
           } catch (err) {
+            const msg = sanitizeTerminalText(err instanceof Error ? err.message : String(err));
             console.error(
-              `[pi-mcp] Failed to refresh tools for ${server.name}:`,
-              err,
+              `[pi-mcp] Failed to refresh tools for ${server.name}: ${msg}`,
             );
           }
         }
@@ -841,9 +843,12 @@ export class ServerManager {
       LoggingMessageNotificationSchema,
       async (notification) => {
         const { level = "info", logger = server.name, data } = notification.params ?? {};
-        const msg = typeof data === "string" ? data : JSON.stringify(data);
-        console.error(`[pi-mcp:${server.name}] [${level}] ${logger}: ${msg}`);
-        appendStderr(`[${level}] ${logger}: ${msg}`);
+        const rawMsg = typeof data === "string" ? data : JSON.stringify(data);
+        const safeLevel = sanitizeTerminalText(String(level), { maxLength: 32 });
+        const safeLogger = sanitizeTerminalText(String(logger), { maxLength: 100 });
+        const safeMsg = sanitizeTerminalText(rawMsg ?? "");
+        console.error(`[pi-mcp:${server.name}] [${safeLevel}] ${safeLogger}: ${safeMsg}`);
+        appendStderr(`[${safeLevel}] ${safeLogger}: ${safeMsg}`);
       },
     );
 
@@ -963,14 +968,15 @@ export class ServerManager {
         if (server.state !== "ready" || signal.aborted || server.client !== client) {
           return;
         }
-        const msg = err instanceof Error ? err.message : String(err);
+        const rawMsg = err instanceof Error ? err.message : String(err);
         if (
           /unknown message ID|Received a response for an unknown message ID|notifications\/progress|unknown token/i.test(
-            msg,
+            rawMsg,
           )
         ) {
           return;
         }
+        const msg = sanitizeTerminalText(rawMsg);
         if (server.config.transport === "sse") {
           console.error(`[pi-mcp] Server ${server.name} SSE stream error, reconnecting: ${msg}`);
           scheduleErrorRecovery();
@@ -989,7 +995,7 @@ export class ServerManager {
           // on GET. Ignore it so POST-only servers do not enter a spurious recovery loop; genuine
           // stream drops on established streams report "SSE stream disconnected" or
           // "Maximum reconnection attempts (0) exceeded." instead.
-          if (/Failed to open SSE stream:/i.test(msg)) {
+          if (/Failed to open SSE stream:/i.test(rawMsg)) {
             return;
           }
           console.error(`[pi-mcp] Server ${server.name} HTTP stream error, reconnecting: ${msg}`);
@@ -1024,7 +1030,7 @@ export class ServerManager {
         // WHY: McpOAuthProvider._loadState() already backed up and removed the corrupt
         // state file before throwing this error. Log the warning and retry once immediately
         // without consuming retryCount so OAuth can proceed cleanly into AuthRequiredError.
-        console.error(`[pi-mcp] ${error.message}`);
+        console.error(`[pi-mcp] ${sanitizeTerminalText(error.message)}`);
         if (signal.aborted) throw new AuthCancelledError(server.name);
         return this._connect(server, server.cwd ?? cwd, signal, true);
       }
@@ -1096,7 +1102,7 @@ export class ServerManager {
           if (err instanceof AuthCancelledError) return;
           const error = err instanceof Error ? err : new Error(String(err));
           server.lastError = error;
-          console.error(`[pi-mcp] [${server.name}] Background recovery failed: ${error.message}`);
+          console.error(`[pi-mcp] [${server.name}] Background recovery failed: ${sanitizeTerminalText(error.message)}`);
           this.onRecoveryFailed?.(server.name, error);
         });
       });

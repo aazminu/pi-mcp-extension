@@ -16,6 +16,7 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import { loadConfig, parseRegisteredServerConfig, type McpConfig, type ServerConfig } from "./config.js";
 import { ServerManager } from "./server-manager.js";
+import { sanitizeTerminalText } from "./terminal-text.js";
 import { AuthLockError, AuthRequiredError } from "./oauth-provider.js";
 import * as Type from "typebox";
 import { ToolBridge } from "./tool-bridge.js";
@@ -65,7 +66,7 @@ function openBrowser(url: string): Promise<void> {
     });
 
     child.once("error", (err) => {
-      console.error(`[pi-mcp] Failed to open browser: ${err.message}`);
+      console.error(`[pi-mcp] Failed to open browser: ${sanitizeTerminalText(err.message)}`);
       reject(err);
     });
 
@@ -86,7 +87,7 @@ export const startupAuthLaterOption = "Not now";
 
 function formatErrorMessage(err: unknown): string {
   const msg = err instanceof McpError ? err.userMessage : err instanceof Error ? err.message : String(err);
-  return msg.replace(/^AuthRequiredError:\s*/, "");
+  return sanitizeTerminalText(msg.replace(/^AuthRequiredError:\s*/, ""));
 }
 
 interface OAuthCallbackResult {
@@ -220,7 +221,7 @@ export async function waitForOAuthCallback(
         });
       } catch (err) {
         if (err instanceof CallbackUrlValidationError) {
-          context.ui.notify?.(`pi-mcp: Invalid redirect URL — ${err.message}`, "error");
+          context.ui.notify?.(`pi-mcp: Invalid redirect URL — ${sanitizeTerminalText(err.message)}`, "error");
           continue;
         }
         throw err;
@@ -346,7 +347,7 @@ export default async function (pi: ExtensionAPI, paths: { bootstrapCwd?: string;
   } catch (err) {
     // Can't notify yet (no ctx), so log to stderr. The session_start handler
     // will re-try with the real cwd and surface errors properly.
-    console.error(`[pi-mcp] Config error: ${err instanceof McpError ? err.message : String(err)}`);
+    console.error(`[pi-mcp] Config error: ${sanitizeTerminalText(err instanceof McpError ? err.message : String(err))}`);
   }
 
   const getRegisteredEntries = (): RegisteredMcpServer[] =>
@@ -357,7 +358,7 @@ export default async function (pi: ExtensionAPI, paths: { bootstrapCwd?: string;
   let extensionServers = collectRegisteredServers(
     getRegisteredEntries(),
     fileConfig.mcpServers,
-    (err) => console.error(`[pi-mcp] Config error: ${err instanceof McpError ? err.message : String(err)}`),
+    (err) => console.error(`[pi-mcp] Config error: ${sanitizeTerminalText(err instanceof McpError ? err.message : String(err))}`),
   );
   let config: McpConfig = mergeWithRegisteredServers(fileConfig, extensionServers);
 
@@ -808,7 +809,7 @@ export default async function (pi: ExtensionAPI, paths: { bootstrapCwd?: string;
           `Server: ${serverName}`,
           `State:  ${server.state}`,
           `Retries: ${server.retryCount}`,
-          server.lastError ? `Last error: ${server.lastError.message}` : null,
+          server.lastError ? `Last error: ${sanitizeTerminalText(server.lastError.message)}` : null,
           "",
           "Recent output:",
           logs,
@@ -867,7 +868,7 @@ export default async function (pi: ExtensionAPI, paths: { bootstrapCwd?: string;
         ctx.ui.notify(`pi-mcp: Started ${serverName}`, "info");
       } catch (err) {
         if (err instanceof AuthCancelledError) {
-          ctx.ui.notify(`pi-mcp: ${err.message}`, "info");
+          ctx.ui.notify(`pi-mcp: ${sanitizeTerminalText(err.message)}`, "info");
           return;
         }
         const msg = formatErrorMessage(err);
@@ -950,7 +951,7 @@ export default async function (pi: ExtensionAPI, paths: { bootstrapCwd?: string;
             );
           } catch (err) {
             ctx.ui.notify(
-              `pi-mcp: Failed to open browser for ${serverName} (${err instanceof Error ? err.message : String(err)}). Open ${url.toString()} manually or choose "${authPasteOption}".`,
+              `pi-mcp: Failed to open browser for ${serverName} (${sanitizeTerminalText(err instanceof Error ? err.message : String(err))}). Open ${url.toString()} manually or choose "${authPasteOption}".`,
               "error",
             );
           }
@@ -977,7 +978,7 @@ export default async function (pi: ExtensionAPI, paths: { bootstrapCwd?: string;
             await authProvider.invalidateCredentials("tokens");
           } catch (err) {
             if (err instanceof McpError && err.code === "config" && /Corrupt OAuth state file/i.test(err.message)) {
-              console.error(`[pi-mcp] ${err.message}`);
+              console.error(`[pi-mcp] ${sanitizeTerminalText(err.message)}`);
             } else {
               throw err;
             }
@@ -1044,7 +1045,7 @@ export default async function (pi: ExtensionAPI, paths: { bootstrapCwd?: string;
           if (err instanceof McpError && err.code === "config" && /Corrupt OAuth state file/i.test(err.message)) {
             // WHY: McpOAuthProvider._loadState() backed up and removed the corrupt state file.
             // Retry auth() once so interactive authorization proceeds cleanly.
-            console.error(`[pi-mcp] ${err.message}`);
+            console.error(`[pi-mcp] ${sanitizeTerminalText(err.message)}`);
             authResult = await auth(authProvider, authOptions);
           } else {
             throw err;
@@ -1292,7 +1293,7 @@ export default async function (pi: ExtensionAPI, paths: { bootstrapCwd?: string;
           } catch (err) {
             // WHY: Never let a single server's corrupt state file abort mcp_status for all servers.
             // getAuthStatus() already backed up and deleted the corrupt file before throwing.
-            console.error(`[pi-mcp] ${err instanceof Error ? err.message : String(err)}`);
+            console.error(`[pi-mcp] ${sanitizeTerminalText(err instanceof Error ? err.message : String(err))}`);
             authCorrupt = true;
           }
         }
@@ -1364,7 +1365,7 @@ export default async function (pi: ExtensionAPI, paths: { bootstrapCwd?: string;
       }
       try { await connectRequested(name, ctx, undefined, reset); ctx.ui.notify(`pi-mcp: ${name} ready`, "info"); }
       catch (err) {
-        ctx.ui.notify(`pi-mcp: ${err instanceof Error ? err.message : String(err)}`, err instanceof AuthCancelledError ? "info" : "error");
+        ctx.ui.notify(`pi-mcp: ${sanitizeTerminalText(err instanceof Error ? err.message : String(err))}`, err instanceof AuthCancelledError ? "info" : "error");
       }
     },
     getArgumentCompletions: (prefix) => serverNameCompletions(prefix, manager.getAllServers(), { authOnly: true }),
