@@ -13,7 +13,6 @@
  */
 
 import { basename } from "node:path";
-import { StringDecoder } from "node:string_decoder";
 import { pathToFileURL } from "node:url";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
@@ -31,6 +30,11 @@ import { McpOAuthProvider, AuthRequiredError, getAuthStatus, resetAuth, invalida
 import { UnauthorizedError, type OAuthClientProvider } from "@modelcontextprotocol/sdk/client/auth.js";
 import type { ToolRefreshOptions } from "./tool-bridge.js";
 import { sanitizeTerminalText, type SanitizeTerminalTextOptions } from "./terminal-text.js";
+import {
+  createLineSplitter,
+  ensurePidTerminated,
+  instrumentStdioTransport,
+} from "./stdio-process.js";
 
 export {
   type ToolRefreshOptions,
@@ -240,27 +244,15 @@ export function createTransport(
         stderr: "pipe",
       });
       if (onStderr && transport.stderr) {
-        const decoder = new StringDecoder("utf8");
-        let remainder = "";
-        let flushed = false;
+        const splitter = createLineSplitter((rawLine) => {
+          const clean = sanitizeStderrLine(rawLine);
+          if (clean) onStderr(clean);
+        });
         transport.stderr.on("data", (chunk: Buffer) => {
-          remainder += decoder.write(chunk);
-          const lines = remainder.split("\n");
-          remainder = lines.pop() ?? "";
-          for (const rawLine of lines) {
-            const clean = sanitizeStderrLine(rawLine);
-            if (clean) onStderr(clean);
-          }
+          splitter.write(chunk);
         });
         const flush = (): void => {
-          if (flushed) return;
-          flushed = true;
-          remainder += decoder.end();
-          if (remainder) {
-            const clean = sanitizeStderrLine(remainder);
-            remainder = "";
-            if (clean) onStderr(clean);
-          }
+          splitter.end();
         };
         transport.stderr.on("end", flush);
         transport.stderr.on("close", flush);
@@ -623,60 +615,6 @@ export class ServerManager {
     }
   }
 
-  private _isPidAlive(pid: number): boolean {
-    try {
-      process.kill(pid, 0);
-      return true;
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code === "ESRCH") {
-        return false;
-      }
-      return true;
-    }
-  }
-
-  private async _ensurePidTerminated(pid: number | null | undefined): Promise<void> {
-    if (!pid || !this._isPidAlive(pid)) {
-      return;
-    }
-
-    try {
-      process.kill(pid, "SIGTERM");
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code === "ESRCH") {
-        return;
-      }
-    }
-
-    const sigtermDeadline = Date.now() + 500;
-    while (Date.now() < sigtermDeadline) {
-      if (!this._isPidAlive(pid)) {
-        return;
-      }
-      await new Promise<void>((resolve) => setTimeout(resolve, 25));
-    }
-
-    if (!this._isPidAlive(pid)) {
-      return;
-    }
-
-    try {
-      process.kill(pid, "SIGKILL");
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code === "ESRCH") {
-        return;
-      }
-    }
-
-    const sigkillDeadline = Date.now() + 200;
-    while (Date.now() < sigkillDeadline) {
-      if (!this._isPidAlive(pid)) {
-        return;
-      }
-      await new Promise<void>((resolve) => setTimeout(resolve, 25));
-    }
-  }
-
   private async _connect(
     server: ManagedServer,
     cwd: string,
@@ -716,67 +654,17 @@ export class ServerManager {
     server.transport = transport;
 
     if (transport instanceof StdioClientTransport) {
-      // WHY: Capture child PID immediately when StdioClientTransport spawns the process
-      // (before `initialize` is sent), so a timeout or cancellation during `initialize`
-      // can still terminate the child process deterministically before retrying.
-      const origStart = transport.start.bind(transport);
-      transport.start = async () => {
-        const startPromise = origStart();
-        const earlyProc = (transport as unknown as { _process?: { pid?: number } })._process;
-        if (earlyProc?.pid) {
-          server.childPid = earlyProc.pid;
-        }
-        await startPromise;
-        const proc = (transport as unknown as { _process?: { pid?: number } })._process;
-        if (proc?.pid) {
-          server.childPid = proc.pid;
-        } else if (transport.pid) {
-          server.childPid = transport.pid;
-        }
-      };
-
-      // WHY: Client.connect's catch block fires `void this.close()` without awaiting it,
-      // which clears `this._process = undefined` synchronously on the first call. Memoize
-      // transport.close() so our `await client.close()` awaits the actual close completion.
-      let closePromise: Promise<void> | null = null;
-      const origClose = transport.close.bind(transport);
-      transport.close = () => {
-        if (!closePromise) {
-          closePromise = origClose();
-        }
-        return closePromise;
-      };
-
-      if (transport.stderr) {
-        const decoder = new StringDecoder("utf8");
-        let stderrRemainder = "";
-        let stderrFlushed = false;
-        const emitLine = (rawLine: string): void => {
+      instrumentStdioTransport(transport, {
+        onPid: (pid) => {
+          server.childPid = pid;
+        },
+        onStderrLine: (rawLine) => {
           const clean = sanitizeStderrLine(rawLine);
           if (!clean) return;
           appendStderr(clean);
           console.error(`[pi-mcp] [${server.name}] ${clean}`);
-        };
-        transport.stderr.on("data", (chunk: Buffer) => {
-          stderrRemainder += decoder.write(chunk);
-          const lines = stderrRemainder.split("\n");
-          stderrRemainder = lines.pop() ?? "";
-          for (const rawLine of lines) {
-            emitLine(rawLine);
-          }
-        });
-        const flushStderr = (): void => {
-          if (stderrFlushed) return;
-          stderrFlushed = true;
-          stderrRemainder += decoder.end();
-          if (stderrRemainder) {
-            emitLine(stderrRemainder);
-            stderrRemainder = "";
-          }
-        };
-        transport.stderr.on("end", flushStderr);
-        transport.stderr.on("close", flushStderr);
-      }
+        },
+      });
     }
 
     const client = new Client(
@@ -998,9 +886,9 @@ export class ServerManager {
       server.childPid = null;
       await Promise.allSettled([
         client.close(),
-        this._ensurePidTerminated(pid),
+        ensurePidTerminated(pid),
       ]);
-      await this._ensurePidTerminated(pid);
+      await ensurePidTerminated(pid);
       if (server.client === client) {
         server.client = null;
         server.transport = undefined;
@@ -1129,9 +1017,9 @@ export class ServerManager {
 
     await Promise.allSettled([
       client?.close(),
-      this._ensurePidTerminated(pid),
+      ensurePidTerminated(pid),
     ]);
-    await this._ensurePidTerminated(pid);
+    await ensurePidTerminated(pid);
   }
 }
 
