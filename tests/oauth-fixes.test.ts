@@ -1851,7 +1851,10 @@ describe("OAuth Security Fixes", () => {
 
   describe("Origin-Bound OAuth State, DCR Persistence, and Re-Auth Edge Cases (Issues #22, #23)", () => {
     it("should canonicalize server URLs and isolate stored OAuth state across different server origins and paths (Issue 22.1)", async () => {
-      const oauthMod = await import("../src/oauth-provider.js");
+      const oauthMod = {
+        ...(await import("../src/oauth-provider.js")),
+        ...(await import("../src/oauth-state-store.js")),
+      };
       assert.strictEqual(typeof oauthMod.canonicalServerUrl, "function");
       assert.strictEqual(typeof oauthMod.urlsMatch, "function");
       assert.strictEqual(oauthMod.canonicalServerUrl("https://example.com/mcp///"), "https://example.com/mcp");
