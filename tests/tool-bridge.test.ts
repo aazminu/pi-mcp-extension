@@ -8,8 +8,8 @@ import assert from "node:assert/strict";
 import type { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import type { TSchema } from "typebox";
+import { convertJsonSchemaToTypebox } from "../src/schema-convert.js";
 import {
-  convertJsonSchemaToTypebox,
   buildToolName,
   convertMcpContent,
   ToolBridge,

@@ -34,8 +34,8 @@ import {
 import {
   orderUnionMembers,
   convertJsonSchemaToTypebox,
-  buildToolName,
-} from "../src/tool-bridge.js";
+} from "../src/schema-convert.js";
+import { buildToolName } from "../src/tool-bridge.js";
 import {
   stripJsonComments,
   parseRegisteredServerConfig,

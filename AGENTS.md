@@ -44,7 +44,8 @@ Semgrep and ESLint enforce several of these rules. Suppress a finding only with 
 |---|---|
 | `src/index.ts` | Extension entry (default export); `session_start` / `session_shutdown`; connection coordination (`connectRequested`, `connectAttempts`, `authQueue`, startup auth prompts); interactive `authorize()`; `/mcp`, `/mcp:start`, `/mcp:stop`, `/mcp:auth`; `mcp_status` / `mcp_connect` tools |
 | `src/server-manager.ts` | Per-server lifecycle (`stopped → starting → ready → failed`), transport creation, retry/backoff, health checks, `onclose` recovery, `roots/list`, stdio child cleanup, `sanitizeStderrLine` |
-| `src/tool-bridge.ts` | `tools/list` discovery, JSON Schema → TypeBox conversion, tool naming/hashing/collisions, Pi tool registration and `callTool` |
+| `src/tool-bridge.ts` | `tools/list` discovery, tool naming/hashing/collisions, Pi tool registration and `callTool` |
+| `src/schema-convert.ts` | Pure MCP JSON Schema → TypeBox conversion (`convertJsonSchemaToTypebox`, `orderUnionMembers`, `resolveRefTarget`) |
 | `src/config.ts` | Zod schemas, JSONC parsing, global `<agentDir>/mcp.json` + project `.pi/mcp.json` merge (project overrides only what it states; **no `${VAR}` interpolation**), Pi 1.x config aliases |
 | `src/oauth-provider.ts` | MCP SDK `OAuthClientProvider`: silent vs. interactive modes, token/DCR/discovery persistence, refresh rotation |
 | `src/auth-lock.ts` | Cross-process `<hash>.json.lock` with heartbeat and stale-lock reclaim; injectable `AuthLockDeps` |
