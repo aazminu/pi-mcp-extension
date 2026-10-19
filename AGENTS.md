@@ -43,6 +43,7 @@ Semgrep and ESLint enforce several of these rules. Suppress a finding only with 
 | File | Owns |
 |---|---|
 | `src/index.ts` | Extension entry (default export); `session_start` / `session_shutdown`; connection coordination (`connectRequested`, `connectAttempts`, `authQueue`, startup auth prompts); interactive `authorize()`; `/mcp`, `/mcp:start`, `/mcp:stop`, `/mcp:auth`; `mcp_status` / `mcp_connect` tools |
+| `src/commands.ts` | Pure `/mcp*` command argument parsing (`parseAuthArguments`), server-name tab completions (`serverNameCompletions`), and extension-registered server config merging (`collectRegisteredServers`, `mergeWithRegisteredServers`) |
 | `src/server-manager.ts` | Per-server lifecycle (`stopped → starting → ready → failed`), transport creation, retry/backoff, health checks, `onclose` recovery, `roots/list`, stdio child cleanup, `sanitizeStderrLine` |
 | `src/tool-bridge.ts` | `tools/list` discovery, JSON Schema → TypeBox conversion, tool naming/hashing/collisions, Pi tool registration and `callTool` |
 | `src/config.ts` | Zod schemas, JSONC parsing, global `<agentDir>/mcp.json` + project `.pi/mcp.json` merge (project overrides only what it states; **no `${VAR}` interpolation**), Pi 1.x config aliases |

@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert";
-import { serverNameCompletions } from "../src/index.js";
+import { serverNameCompletions } from "../src/commands.js";
 
 describe("serverNameCompletions", () => {
   const servers = [

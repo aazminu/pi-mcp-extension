@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { parseAuthArguments } from "../src/index.js";
+import { parseAuthArguments } from "../src/commands.js";
 
 describe("parseAuthArguments", () => {
   const names = ["local", "team server", "team  server", "release --reset"];
