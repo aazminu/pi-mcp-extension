@@ -48,7 +48,7 @@ Semgrep and ESLint enforce several of these rules. Suppress a finding only with 
 | `src/config.ts` | Zod schemas, JSONC parsing, global `<agentDir>/mcp.json` + project `.pi/mcp.json` merge (project overrides only what it states; **no `${VAR}` interpolation**), Pi 1.x config aliases |
 | `src/oauth-provider.ts` | MCP SDK `OAuthClientProvider`: silent vs. interactive modes, token/DCR/discovery persistence, refresh rotation |
 | `src/auth-lock.ts` | Cross-process `<hash>.json.lock` with heartbeat and stale-lock reclaim; injectable `AuthLockDeps` |
-| `src/callback-server.ts`, `src/callback-url.ts` | Loopback OAuth callback listener; pure redirect/callback URL validation and headless paste-back parsing |
+| `src/callback-server.ts`, `src/callback-url.ts` | Instance-scoped `CallbackServer` loopback OAuth callback listener; pure redirect/callback URL validation (`callbackServerConfigFromRedirectUrl`) and headless paste-back parsing |
 | `src/auth-challenge.ts` | `WWW-Authenticate` discovery (RFC 9728 `resource_metadata`, `scope`) |
 | `src/terminal-text.ts` | Pure terminal/notification text sanitization (`sanitizeTerminalText`): strips ANSI/OSC/DCS/C1 escape sequences and C0/C1 control characters, collapses line breaks, and bounds string length on code-point boundaries |
 | `src/errors.ts` | `McpError` kinds `config \| connection \| auth \| timeout \| protocol`; `AuthRequiredError`, `AuthLockError`, `AuthCancelledError` |

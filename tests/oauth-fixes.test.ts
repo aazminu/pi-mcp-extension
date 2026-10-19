@@ -19,11 +19,9 @@ import { join } from "node:path";
 import { AuthRequiredError, McpOAuthProvider } from "../src/oauth-provider.js";
 import { Agent, createServer, request, type IncomingMessage, type ServerResponse } from "node:http";
 import {
+  CallbackServer,
   callbackServerConfigFromRedirectUrl,
   DEFAULT_PORT,
-  ensureCallbackServer,
-  stopCallbackServer,
-  waitForCallback,
 } from "../src/callback-server.js";
 import { discoverManualAuthChallenge } from "../src/auth-challenge.js";
 import { CallbackUrlValidationError, isSafeAuthorizationUrl, parseCallbackUrl } from "../src/callback-url.js";
@@ -342,18 +340,18 @@ describe("OAuth Security Fixes", () => {
     }
 
     it("should track the actual server port when it differs from preferred", async () => {
-      await stopCallbackServer().catch(() => {});
+      const callbackServer = new CallbackServer();
       const blocker = createServer();
       await new Promise<void>((resolve) => blocker.listen(0, "127.0.0.1", resolve));
       const address = blocker.address();
       assert.ok(address && typeof address === "object");
 
       try {
-        const actualPort = await ensureCallbackServer(address.port);
+        const actualPort = await callbackServer.ensure(address.port);
         assert.ok(actualPort > address.port);
         assert.ok(actualPort <= address.port + 24);
       } finally {
-        await stopCallbackServer().catch(() => {});
+        await callbackServer.stop();
         await new Promise<void>((resolve) => blocker.close(() => resolve()));
       }
     });
@@ -415,7 +413,7 @@ describe("OAuth Security Fixes", () => {
     });
 
     it("should fail instead of incrementing the port for fixed redirect URLs", async () => {
-      await stopCallbackServer().catch(() => {});
+      const callbackServer = new CallbackServer();
 
       const blocker = createServer((_req, res) => {
         res.end("busy");
@@ -428,51 +426,56 @@ describe("OAuth Security Fixes", () => {
 
       try {
         await assert.rejects(
-          () => ensureCallbackServer(address.port, { host: "127.0.0.1", allowPortFallback: false }),
+          () => callbackServer.ensure(address.port, { host: "127.0.0.1", allowPortFallback: false }),
           /requires this exact port/,
         );
       } finally {
+        await callbackServer.stop();
         await new Promise<void>((resolve) => blocker.close(() => resolve()));
       }
     });
 
 
     it("should rebind from a fallback callback listener to a fixed redirect listener when no auth is pending", async () => {
-      await stopCallbackServer().catch(() => {});
+      const callbackServer = new CallbackServer();
 
-      const fallbackPreferredPort = await getFreePort();
-      const fallbackPort = await ensureCallbackServer(fallbackPreferredPort, { host: "127.0.0.1", allowPortFallback: true });
-      assert.strictEqual(fallbackPort, fallbackPreferredPort);
+      try {
+        const fallbackPreferredPort = await getFreePort();
+        const fallbackPort = await callbackServer.ensure(fallbackPreferredPort, { host: "127.0.0.1", allowPortFallback: true });
+        assert.strictEqual(fallbackPort, fallbackPreferredPort);
 
-      const fixedPort = await getFreePort();
-      const reboundPort = await ensureCallbackServer(fixedPort, { host: "127.0.0.1", allowPortFallback: false });
-      assert.strictEqual(reboundPort, fixedPort);
-
-      await stopCallbackServer();
+        const fixedPort = await getFreePort();
+        const reboundPort = await callbackServer.ensure(fixedPort, { host: "127.0.0.1", allowPortFallback: false });
+        assert.strictEqual(reboundPort, fixedPort);
+      } finally {
+        await callbackServer.stop();
+      }
     });
 
     it("should rebind from a fixed redirect listener to a fallback listener when no auth is pending", async () => {
-      await stopCallbackServer().catch(() => {});
+      const callbackServer = new CallbackServer();
 
-      const fixedPort = await getFreePort();
-      const fixedListenerPort = await ensureCallbackServer(fixedPort, { host: "127.0.0.1", allowPortFallback: false });
-      assert.strictEqual(fixedListenerPort, fixedPort);
+      try {
+        const fixedPort = await getFreePort();
+        const fixedListenerPort = await callbackServer.ensure(fixedPort, { host: "127.0.0.1", allowPortFallback: false });
+        assert.strictEqual(fixedListenerPort, fixedPort);
 
-      const fallbackPreferredPort = await getFreePort();
-      const fallbackPort = await ensureCallbackServer(fallbackPreferredPort, { host: "127.0.0.1", allowPortFallback: true });
-      assert.strictEqual(fallbackPort, fallbackPreferredPort);
-
-      await stopCallbackServer();
+        const fallbackPreferredPort = await getFreePort();
+        const fallbackPort = await callbackServer.ensure(fallbackPreferredPort, { host: "127.0.0.1", allowPortFallback: true });
+        assert.strictEqual(fallbackPort, fallbackPreferredPort);
+      } finally {
+        await callbackServer.stop();
+      }
     });
 
 
     it("should stop the callback server when a browser keeps the callback socket open", async () => {
-      await stopCallbackServer().catch(() => {});
+      const callbackServer = new CallbackServer();
 
       const port = await getFreePort();
       const state = "keepalive-state";
-      await ensureCallbackServer(port, { host: "127.0.0.1", allowPortFallback: false });
-      const callbackPromise = waitForCallback(state);
+      await callbackServer.ensure(port, { host: "127.0.0.1", allowPortFallback: false });
+      const callbackPromise = callbackServer.waitForCallback(state);
 
       const agent = new Agent({ keepAlive: true });
       try {
@@ -496,25 +499,69 @@ describe("OAuth Security Fixes", () => {
         assert.strictEqual(await callbackPromise, "test-code");
 
         await Promise.race([
-          stopCallbackServer(),
-          new Promise((_, reject) => setTimeout(() => reject(new Error("stopCallbackServer timed out")), 1000)),
+          callbackServer.stop(),
+          new Promise((_, reject) => setTimeout(() => reject(new Error("callbackServer.stop() timed out")), 1000)),
         ]);
       } finally {
         agent.destroy();
-        await stopCallbackServer().catch(() => {});
+        await callbackServer.stop();
       }
     });
 
     it("should return the same port on subsequent calls", async () => {
-      await stopCallbackServer().catch(() => {});
+      const callbackServer = new CallbackServer();
 
-      const preferredPort = await getFreePort();
-      const port1 = await ensureCallbackServer(preferredPort);
-      const port2 = await ensureCallbackServer(preferredPort);
+      try {
+        const preferredPort = await getFreePort();
+        const port1 = await callbackServer.ensure(preferredPort);
+        const port2 = await callbackServer.ensure(preferredPort);
 
-      assert.strictEqual(port1, port2, "Subsequent calls should return the same port");
+        assert.strictEqual(port1, port2, "Subsequent calls should return the same port");
+      } finally {
+        await callbackServer.stop();
+      }
+    });
 
-      await stopCallbackServer();
+    it("should isolate listeners and pending auth state across separate CallbackServer instances", async () => {
+      const serverA = new CallbackServer();
+      const serverB = new CallbackServer();
+
+      try {
+        const preferredPortA = await getFreePort();
+        const preferredPortB = await getFreePort();
+        const portA = await serverA.ensure(preferredPortA, { host: "127.0.0.1", allowPortFallback: true });
+        const portB = await serverB.ensure(preferredPortB, { host: "127.0.0.1", allowPortFallback: true });
+
+        assert.notStrictEqual(portA, portB);
+        assert.strictEqual(serverA.isRunning(), true);
+        assert.strictEqual(serverB.isRunning(), true);
+
+        const waitA = serverA.waitForCallback("state-a");
+        const waitB = serverB.waitForCallback("state-b");
+        assert.strictEqual(serverA.pendingCount(), 1);
+        assert.strictEqual(serverB.pendingCount(), 1);
+
+        // Sending state-a to serverB must be rejected as invalid_state (400) without resolving waitA
+        const crossRes = await fetch(`http://127.0.0.1:${portB}/callback?code=code-a&state=state-a`);
+        assert.strictEqual(crossRes.status, 400);
+        assert.strictEqual(serverA.pendingCount(), 1);
+
+        // Stopping serverA must not stop serverB or cancel serverB's pending auth
+        const waitARejected = assert.rejects(waitA, /OAuth callback server stopped/);
+        await serverA.stop();
+        await waitARejected;
+        assert.strictEqual(serverA.isRunning(), false);
+        assert.strictEqual(serverB.isRunning(), true);
+        assert.strictEqual(serverB.pendingCount(), 1);
+
+        const resB = await fetch(`http://127.0.0.1:${portB}/callback?code=code-b&state=state-b`);
+        assert.strictEqual(resB.status, 200);
+        assert.strictEqual(await waitB, "code-b");
+        assert.strictEqual(serverB.pendingCount(), 0);
+      } finally {
+        await serverA.stop();
+        await serverB.stop();
+      }
     });
   });
 
@@ -938,19 +985,19 @@ describe("OAuth Security Fixes", () => {
       );
 
       // Act & Assert (callback HTTP server integration)
-      await stopCallbackServer().catch(() => {});
+      const callbackServer = new CallbackServer();
       const probe = createServer();
       await new Promise<void>((resolve) => probe.listen(0, "127.0.0.1", resolve));
       const addr = probe.address();
       assert.ok(addr && typeof addr === "object");
       await new Promise<void>((resolve) => probe.close(() => resolve()));
 
-      const port = await ensureCallbackServer(addr.port, { host: "127.0.0.1", allowPortFallback: false });
+      const port = await callbackServer.ensure(addr.port, { host: "127.0.0.1", allowPortFallback: false });
       try {
         const res = await fetch(`http://127.0.0.1:${port}/callback?error=access_denied&state=wrong-state`);
         assert.strictEqual(res.status, 400);
       } finally {
-        await stopCallbackServer().catch(() => {});
+        await callbackServer.stop();
       }
     });
   });

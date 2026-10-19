@@ -994,7 +994,7 @@ it("should immediately wake aborted authQueue waiters, remove zombie connectAtte
 
 it("should perform full teardown on session_start config reload or config load failure, and update ToolBridge settings (Issues 18.1, 18.2, 18.3, 18.4)", async () => {
   const { startFakeOAuthServer } = await import("./helpers/fake-oauth-server.js");
-  const { isCallbackServerRunning } = await import("../src/callback-server.js");
+  const { CallbackServer } = await import("../src/callback-server.js");
   const { mkdir, writeFile } = await import("node:fs/promises");
   const { default: extension } = await import("../src/index.js");
   const tsxEsmLoader = import.meta.resolve("tsx/esm");
@@ -1094,11 +1094,13 @@ it("should perform full teardown on session_start config reload or config load f
       }),
     );
 
+    const callbackServer = new CallbackServer();
     await extension(pi, {
       bootstrapCwd: cwd1,
       globalConfigPath: join(baseDir, "absent-global.json"),
       authStorageDir: authDir,
       browserOpen: () => {},
+      callbackServer,
     });
 
     // Start Session 1 in cwd1
@@ -1111,7 +1113,7 @@ it("should perform full teardown on session_start config reload or config load f
     const inFlightAuth = tools.get("mcp_connect").execute("", { name: "oauth1" }, undefined, undefined, ctx1);
     const inFlightRejected = assert.rejects(inFlightAuth, /cancelled/i);
     await browserWaiting;
-    assert.equal(isCallbackServerRunning(), true);
+    assert.equal(callbackServer.isRunning(), true);
 
     // Switch to Session 2 (cwd2 with broken .pi/mcp.json):
     // Must tear down stdio1, deactivate/remove its tools, abort inFlightAuth, stop callback server, clear status bar, and reset manager!
@@ -1120,7 +1122,7 @@ it("should perform full teardown on session_start config reload or config load f
     await inFlightRejected;
 
     assert.equal(activeTools.length, 0, "Stale tools from previous session must be removed when new session config fails to load");
-    assert.equal(isCallbackServerRunning(), false, "Callback server must be stopped on session teardown");
+    assert.equal(callbackServer.isRunning(), false, "Callback server must be stopped on session teardown");
     assert.equal(statuses.at(-1), undefined, "Status bar must be cleared on session teardown");
     const statusInCwd2 = JSON.parse(
       (await tools.get("mcp_status").execute("", {}, undefined, undefined, ctx2)).content[0].text,

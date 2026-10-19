@@ -16,12 +16,6 @@ interface PendingAuth {
   timeout: ReturnType<typeof setTimeout>;
 }
 
-let server: Server | null = null;
-let actualServerPort: number | null = null;
-let actualServerHost: string | null = null;
-const serverSockets = new Set<Socket>();
-const pendingAuths = new Map<string, PendingAuth>();
-
 const DEFAULT_PORT = 19876;
 const DEFAULT_HOST = "127.0.0.1";
 const CALLBACK_PATH = "/callback";
@@ -68,76 +62,6 @@ function escapeHtml(text: string): string {
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#039;");
-}
-
-/**
- * Handle incoming HTTP requests to the callback server.
- */
-function handleRequest(req: IncomingMessage, res: ServerResponse): void {
-  let parsed: ReturnType<typeof parseCallbackUrl>;
-  try {
-    const requestUrl = new URL(req.url || "/", "http://localhost").toString();
-    parsed = parseCallbackUrl(requestUrl, {
-      expectedState: (state) => pendingAuths.has(state),
-    });
-  } catch (err) {
-    if (err instanceof CallbackUrlValidationError) {
-      if (err.reason === "wrong_path") {
-        res.writeHead(404, { "Content-Type": "text/plain", "Connection": "close" });
-        res.end("Not found");
-        return;
-      }
-      res.writeHead(400, { "Content-Type": "text/html", "Connection": "close" });
-      res.end(HTML_ERROR(err.message));
-      return;
-    }
-    res.writeHead(400, { "Content-Type": "text/html", "Connection": "close" });
-    res.end(HTML_ERROR("Invalid callback request"));
-    return;
-  }
-
-  // Handle OAuth errors
-  if ("error" in parsed) {
-    res.writeHead(200, { "Content-Type": "text/html", "Connection": "close" });
-    res.end(HTML_ERROR(parsed.error));
-    if (pendingAuths.has(parsed.state)) {
-      const pending = pendingAuths.get(parsed.state)!;
-      clearTimeout(pending.timeout);
-      pendingAuths.delete(parsed.state);
-      setTimeout(() => pending.reject(new Error(parsed.error)), 0);
-    }
-    return;
-  }
-
-  const pending = pendingAuths.get(parsed.state)!;
-
-  // Clear timeout and resolve the pending promise
-  clearTimeout(pending.timeout);
-  pendingAuths.delete(parsed.state);
-  pending.resolve(parsed.code);
-
-  res.writeHead(200, { "Content-Type": "text/html", "Connection": "close" });
-  res.end(HTML_SUCCESS);
-}
-
-async function closeCurrentServer(): Promise<void> {
-  if (!server) return;
-
-  const currentServer = server;
-  server = null;
-  actualServerPort = null;
-  actualServerHost = null;
-
-  for (const socket of Array.from(serverSockets)) {
-    socket.destroy();
-  }
-  serverSockets.clear();
-
-  await new Promise<void>((resolve) => {
-    currentServer.close(() => {
-      resolve();
-    });
-  });
 }
 
 /**
@@ -193,153 +117,234 @@ export function callbackServerConfigFromRedirectUrl(redirectUrl?: string): Callb
 }
 
 /**
- * Ensure the callback server is running.
- * Scans forward for an available local port when port fallback is enabled.
- *
- * @param preferredPort - The preferred port to use (default: 19876)
- * @returns The actual port the server is listening on
+ * Instance-scoped HTTP server that handles OAuth callbacks from the authorization server.
  */
-export async function ensureCallbackServer(preferredPort: number = DEFAULT_PORT, options: CallbackServerOptions = {}): Promise<number> {
-  const host = options.host ?? DEFAULT_HOST;
-  const allowPortFallback = options.allowPortFallback ?? true;
+export class CallbackServer {
+  private server: Server | null = null;
+  private actualServerPort: number | null = null;
+  private actualServerHost: string | null = null;
+  private readonly serverSockets = new Set<Socket>();
+  private readonly pendingAuths = new Map<string, PendingAuth>();
 
-  if (server) {
-    const address = server.address();
-    if (actualServerPort === null && address && typeof address === "object" && "port" in address) {
-      actualServerPort = address.port;
-    }
-
-    const serverMatchesRequest = actualServerPort === preferredPort && actualServerHost === host;
-    if (serverMatchesRequest && actualServerPort !== null) {
-      return actualServerPort;
-    }
-
-    if (pendingAuths.size > 0) {
-      throw new Error(
-        `OAuth callback server is already handling an authorization flow on ${actualServerHost}:${actualServerPort}`
-      );
-    }
-
-    await closeCurrentServer();
-  }
-
-  const maxAttempts = allowPortFallback ? 25 : 1; // Try up to 25 ports unless a fixed redirect URI is configured
-
-  for (let offset = 0; offset < maxAttempts; offset++) {
-    const candidatePort = preferredPort + offset;
-    const candidateServer = createServer(handleRequest);
-
+  /**
+   * Handle incoming HTTP requests to the callback server.
+   */
+  private handleRequest(req: IncomingMessage, res: ServerResponse): void {
+    let parsed: ReturnType<typeof parseCallbackUrl>;
     try {
-      candidateServer.on("connection", (socket: Socket) => {
-        serverSockets.add(socket);
-        socket.once("close", () => {
-          serverSockets.delete(socket);
-        });
+      const requestUrl = new URL(req.url || "/", "http://localhost").toString();
+      parsed = parseCallbackUrl(requestUrl, {
+        expectedState: (state) => this.pendingAuths.has(state),
       });
-
-      await new Promise<void>((resolve, reject) => {
-        candidateServer.once("error", (err: Error) => {
-          reject(err);
-        });
-
-        candidateServer.listen(candidatePort, host, () => {
-          resolve();
-        });
-      });
-      server = candidateServer;
-      actualServerPort = candidatePort;
-      actualServerHost = host;
-      server.unref(); // Don't block process exit
-      return candidatePort;
-    } catch (error) {
-      const nodeError = error as NodeJS.ErrnoException;
-      await new Promise<void>((resolve) => {
-        candidateServer.close(() => resolve());
-      });
-
-      // If not EADDRINUSE, rethrow
-      if (nodeError.code !== "EADDRINUSE") {
-        throw error;
+    } catch (err) {
+      if (err instanceof CallbackUrlValidationError) {
+        if (err.reason === "wrong_path") {
+          res.writeHead(404, { "Content-Type": "text/plain", "Connection": "close" });
+          res.end("Not found");
+          return;
+        }
+        res.writeHead(400, { "Content-Type": "text/html", "Connection": "close" });
+        res.end(HTML_ERROR(err.message));
+        return;
       }
-
-      if (!allowPortFallback) {
-        throw new Error(`OAuth callback port ${preferredPort} is already in use, and redirect URL requires this exact port`);
-      }
+      res.writeHead(400, { "Content-Type": "text/html", "Connection": "close" });
+      res.end(HTML_ERROR("Invalid callback request"));
+      return;
     }
-  }
 
-  throw new Error(
-    `OAuth callback port ${preferredPort} is already in use and no free port was found in range ${preferredPort}-${preferredPort + maxAttempts - 1}`
-  );
-}
-
-/**
- * Wait for a callback with the given OAuth state.
- * Returns a promise that resolves with the authorization code.
- *
- * @param oauthState - The OAuth state parameter to wait for
- * @param timeoutMs - Timeout in milliseconds (default: 5 minutes)
- * @returns Promise that resolves with the authorization code
- */
-export function waitForCallback(
-  oauthState: string,
-  timeoutMs: number = TIMEOUT_MS
-): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => {
-      if (pendingAuths.has(oauthState)) {
-        pendingAuths.delete(oauthState);
-        reject(new Error("OAuth callback timeout - authorization took too long"));
+    // Handle OAuth errors
+    if ("error" in parsed) {
+      res.writeHead(200, { "Content-Type": "text/html", "Connection": "close" });
+      res.end(HTML_ERROR(parsed.error));
+      if (this.pendingAuths.has(parsed.state)) {
+        const pending = this.pendingAuths.get(parsed.state)!;
+        clearTimeout(pending.timeout);
+        this.pendingAuths.delete(parsed.state);
+        setTimeout(() => pending.reject(new Error(parsed.error)), 0);
       }
-    }, timeoutMs);
+      return;
+    }
 
-    pendingAuths.set(oauthState, { resolve, reject, timeout });
-  });
-}
+    const pending = this.pendingAuths.get(parsed.state)!;
 
-/**
- * Cancel a pending authorization by state.
- *
- * @param oauthState - The OAuth state to cancel
- */
-export function cancelCallback(oauthState: string): void {
-  const pending = pendingAuths.get(oauthState);
-  if (pending) {
+    // Clear timeout and resolve the pending promise
     clearTimeout(pending.timeout);
-    pendingAuths.delete(oauthState);
-    pending.reject(new Error("Authorization cancelled"));
+    this.pendingAuths.delete(parsed.state);
+    pending.resolve(parsed.code);
+
+    res.writeHead(200, { "Content-Type": "text/html", "Connection": "close" });
+    res.end(HTML_SUCCESS);
   }
-}
 
-/**
- * Stop the callback server and reject all pending authorizations.
- */
-export async function stopCallbackServer(): Promise<void> {
-  await closeCurrentServer();
+  private async closeCurrentServer(): Promise<void> {
+    if (!this.server) return;
 
-  // Reject all pending auths (defer to allow any pending operations to complete)
-  const pendingList = Array.from(pendingAuths.entries());
-  pendingAuths.clear();
-  setTimeout(() => {
-    for (const [, pending] of pendingList) {
-      clearTimeout(pending.timeout);
-      pending.reject(new Error("OAuth callback server stopped"));
+    const currentServer = this.server;
+    this.server = null;
+    this.actualServerPort = null;
+    this.actualServerHost = null;
+
+    for (const socket of Array.from(this.serverSockets)) {
+      socket.destroy();
     }
-  }, 0);
-}
+    this.serverSockets.clear();
 
-/**
- * Check if the callback server is running.
- */
-export function isCallbackServerRunning(): boolean {
-  return server !== null;
-}
+    await new Promise<void>((resolve) => {
+      currentServer.close(() => {
+        resolve();
+      });
+    });
+  }
 
-/**
- * Get the number of pending authorizations.
- */
-export function getPendingAuthCount(): number {
-  return pendingAuths.size;
+  /**
+   * Ensure the callback server is running.
+   * Scans forward for an available local port when port fallback is enabled.
+   *
+   * @param preferredPort - The preferred port to use (default: 19876)
+   * @returns The actual port the server is listening on
+   */
+  async ensure(preferredPort: number = DEFAULT_PORT, options: CallbackServerOptions = {}): Promise<number> {
+    const host = options.host ?? DEFAULT_HOST;
+    const allowPortFallback = options.allowPortFallback ?? true;
+
+    if (this.server) {
+      const address = this.server.address();
+      if (this.actualServerPort === null && address && typeof address === "object" && "port" in address) {
+        this.actualServerPort = address.port;
+      }
+
+      const serverMatchesRequest = this.actualServerPort === preferredPort && this.actualServerHost === host;
+      if (serverMatchesRequest && this.actualServerPort !== null) {
+        return this.actualServerPort;
+      }
+
+      if (this.pendingAuths.size > 0) {
+        throw new Error(
+          `OAuth callback server is already handling an authorization flow on ${this.actualServerHost}:${this.actualServerPort}`
+        );
+      }
+
+      await this.closeCurrentServer();
+    }
+
+    const maxAttempts = allowPortFallback ? 25 : 1; // Try up to 25 ports unless a fixed redirect URI is configured
+
+    for (let offset = 0; offset < maxAttempts; offset++) {
+      const candidatePort = preferredPort + offset;
+      const candidateServer = createServer((req, res) => this.handleRequest(req, res));
+
+      try {
+        candidateServer.on("connection", (socket: Socket) => {
+          this.serverSockets.add(socket);
+          socket.once("close", () => {
+            this.serverSockets.delete(socket);
+          });
+        });
+
+        await new Promise<void>((resolve, reject) => {
+          candidateServer.once("error", (err: Error) => {
+            reject(err);
+          });
+
+          candidateServer.listen(candidatePort, host, () => {
+            resolve();
+          });
+        });
+        this.server = candidateServer;
+        this.actualServerPort = candidatePort;
+        this.actualServerHost = host;
+        this.server.unref(); // Don't block process exit
+        return candidatePort;
+      } catch (error) {
+        const nodeError = error as NodeJS.ErrnoException;
+        await new Promise<void>((resolve) => {
+          candidateServer.close(() => resolve());
+        });
+
+        // If not EADDRINUSE, rethrow
+        if (nodeError.code !== "EADDRINUSE") {
+          throw error;
+        }
+
+        if (!allowPortFallback) {
+          throw new Error(`OAuth callback port ${preferredPort} is already in use, and redirect URL requires this exact port`);
+        }
+      }
+    }
+
+    throw new Error(
+      `OAuth callback port ${preferredPort} is already in use and no free port was found in range ${preferredPort}-${preferredPort + maxAttempts - 1}`
+    );
+  }
+
+  /**
+   * Wait for a callback with the given OAuth state.
+   * Returns a promise that resolves with the authorization code.
+   *
+   * @param oauthState - The OAuth state parameter to wait for
+   * @param timeoutMs - Timeout in milliseconds (default: 5 minutes)
+   * @returns Promise that resolves with the authorization code
+   */
+  waitForCallback(
+    oauthState: string,
+    timeoutMs: number = TIMEOUT_MS
+  ): Promise<string> {
+    return new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        if (this.pendingAuths.has(oauthState)) {
+          this.pendingAuths.delete(oauthState);
+          reject(new Error("OAuth callback timeout - authorization took too long"));
+        }
+      }, timeoutMs);
+
+      this.pendingAuths.set(oauthState, { resolve, reject, timeout });
+    });
+  }
+
+  /**
+   * Cancel a pending authorization by state.
+   *
+   * @param oauthState - The OAuth state to cancel
+   */
+  cancel(oauthState: string): void {
+    const pending = this.pendingAuths.get(oauthState);
+    if (pending) {
+      clearTimeout(pending.timeout);
+      this.pendingAuths.delete(oauthState);
+      pending.reject(new Error("Authorization cancelled"));
+    }
+  }
+
+  /**
+   * Stop the callback server and reject all pending authorizations.
+   */
+  async stop(): Promise<void> {
+    await this.closeCurrentServer();
+
+    // Reject all pending auths (defer to allow any pending operations to complete)
+    const pendingList = Array.from(this.pendingAuths.entries());
+    this.pendingAuths.clear();
+    setTimeout(() => {
+      for (const [, pending] of pendingList) {
+        clearTimeout(pending.timeout);
+        pending.reject(new Error("OAuth callback server stopped"));
+      }
+    }, 0);
+  }
+
+  /**
+   * Check if the callback server is running.
+   */
+  isRunning(): boolean {
+    return this.server !== null;
+  }
+
+  /**
+   * Get the number of pending authorizations.
+   */
+  pendingCount(): number {
+    return this.pendingAuths.size;
+  }
 }
 
 // Export constants for testing/config
